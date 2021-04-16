@@ -18,6 +18,25 @@
 #include <asm/ptdump.h>
 
 static struct dentry *pid_page_tables_file;
+struct mm_struct mm;
+
+static unsigned long start_code;
+static unsigned long end_code;
+static unsigned long start_data;
+static unsigned long end_data;
+static unsigned long start_brk;
+static unsigned long end_brk;
+static unsigned long mmap_end;
+static unsigned long mmap_base;
+static unsigned long misc_start;
+static unsigned long misc_end;
+
+static unsigned long stack_top;
+static unsigned long arg_start;
+static unsigned long arg_end;
+static unsigned long env_start;
+static unsigned long env_end;
+
 
 /* Kernel space */
 static const struct addr_marker address_markers[] = {
@@ -388,8 +407,11 @@ static int pid_page_tables_open(struct inode *inode, struct file *file)
 ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_t s, loff_t *o)
 {
 	void *buffer;
+	unsigned long pid;
+	struct pid *kpid;
+	struct task_struct *ts;
 
-	buffer = kmalloc(s, GFP_KERNEL);
+	buffer = kzalloc(s, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
 
@@ -397,6 +419,42 @@ ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_t s, lo
 		return -EFAULT;
 
 	printk("Input: %s\n", (char *)buffer);
+	if (kstrtoul(buffer, 0, &pid))
+		return -EINVAL;
+	
+	printk("str to ul 0x%lx\n", pid);
+
+	kpid = find_get_pid(pid);
+	ts = get_pid_task(kpid, PIDTYPE_PID);
+	if (ts) {
+		printk("aaaaaa task comm %s\n", ts->comm);
+		printk("aaaaaa task mm 0x%lx\n", ts->mm);
+		printk("aaaaaa task mm 0x%lx\n", ts->active_mm);
+		if (ts->mm) {
+			struct vm_area_struct *tmp = ts->mm->mmap->vm_prev;
+			struct vm_area_struct *vma = ts->mm->mmap;
+			printk("pgd 0x%lx\n", ts->mm->pgd);
+			mm.pgd = ts->mm->pgd;
+			kernel_ptdump_info.base_addr = 0;
+			printk("aaaa text code 0x%lx - 0x%lx\n", ts->mm->start_code, ts->mm->end_code);
+			printk("aaaa data 0x%lx - 0x%lx\n", ts->mm->start_data, ts->mm->end_data);
+			printk("aaaa brk 0x%lx - 0x%lx\n", ts->mm->start_brk, ts->mm->brk);
+			printk("aaaa stack 0x%lx\n", ts->mm->start_stack);
+			printk("aaaa arg_start 0x%lx - 0x%lx\n", ts->mm->arg_start, ts->mm->arg_end);
+			printk("aaaa env_start 0x%lx - 0x%lx\n", ts->mm->env_start, ts->mm->env_end);
+			printk("aaaa mmap_base 0x%lx - 0x%lx\n", ts->mm->mmap_base, ts->mm->highest_vm_end);
+			while (vma) {
+				printk("aaaa vma 0x%lx - 0x%lx\n", vma->vm_start, vma->vm_end);
+				vma = vma->vm_next;
+			}
+			while (tmp) {
+				printk("tmp vma 0x%lx - 0x%lx\n", tmp->vm_start, tmp->vm_end);
+				tmp = tmp->vm_prev;
+			}
+			
+		}
+	}
+
 
 	kfree(buffer);
 
@@ -411,8 +469,6 @@ static const struct file_operations pid_page_tables_fops = {
 	.release = single_release,
 	.write = pid_page_tables_write,
 };
-
-struct mm_struct mm;
 
 static int __init pid_page_tables_init(void)
 {
