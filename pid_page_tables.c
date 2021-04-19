@@ -1,3 +1,18 @@
+/*
+ * Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Debug helper to dump the current kernel pagetables of the system
+ * so that we can see what the various memory ranges are set to.
+ *
+ * Derived from x86 and arm implementation:
+ * (C) Copyright 2008 Intel Corporation
+ *
+ * Author: Arjan van de Ven <arjan@linux.intel.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 2
+ * of the License.
+ */
 #include <linux/debugfs.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
@@ -15,31 +30,31 @@
 #include <asm/memory.h>
 #include <asm/pgtable.h>
 #include <asm/pgtable-hwdef.h>
-#include <asm/ptdump.h>
+
+#ifndef CONFIG_ARM64
+#error "This module is only for the ARM64 architecture."
+#endif
+
+struct addr_marker {
+	unsigned long start_address;
+	char *name;
+};
+
+struct ptdump_info {
+	struct mm_struct	*mm;
+	struct addr_marker	*markers;
+	unsigned long	base_addr;
+	unsigned long check_addr;
+	char *name;
+	int has_user_space;
+};
 
 static struct dentry *pid_page_tables_file;
-struct mm_struct mm;
-
-static unsigned long start_code;
-static unsigned long end_code;
-static unsigned long start_data;
-static unsigned long end_data;
-static unsigned long start_brk;
-static unsigned long end_brk;
-static unsigned long mmap_end;
-static unsigned long mmap_base;
-static unsigned long misc_start;
-static unsigned long misc_end;
-
-static unsigned long stack_top;
-static unsigned long arg_start;
-static unsigned long arg_end;
-static unsigned long env_start;
-static unsigned long env_end;
-
+static struct mm_struct mm;
+static pgd_t *kernel_pgd;
 
 /* Kernel space */
-static const struct addr_marker address_markers[] = {
+static struct addr_marker address_markers[] = {
 #ifdef CONFIG_KASAN
 	{ KASAN_SHADOW_START,		"Kasan shadow start" },
 	{ KASAN_SHADOW_END,		"Kasan shadow end" },
@@ -57,6 +72,32 @@ static const struct addr_marker address_markers[] = {
 	{ VMEMMAP_START + VMEMMAP_SIZE,	"vmemmap end" },
 #endif
 	{ PAGE_OFFSET,			"Linear Mapping" },
+	{ -1,				NULL },
+};
+
+#define START_CODE	0
+#define END_CODE	1
+#define START_DATA	2
+#define END_DATA	3
+#define START_BRK	4
+#define END_BRK		5
+#define MMAP_END	6
+#define MMAP_BASE	7
+#define MISC_START	8
+#define MISC_END	9
+
+/* User space */
+static struct addr_marker address_markers_user[] = {
+	{ 0, 			"Start code" },
+	{ 0, 			"End code" },
+	{ 0, 			"Start data" },
+	{ 0, 			"End data" },
+	{ 0, 			"Start brk (heap)" },
+	{ 0, 			"End brk (heap)" },
+	{ 0, 			"Mmap end" },
+	{ 0, 			"Mmap base" },
+	{ 0, 			"Misc start" },
+	{ 0, 			"Misc end" },
 	{ -1,				NULL },
 };
 
@@ -365,13 +406,67 @@ static void walk_pgd(struct pg_state *st, struct mm_struct *mm,
 	}
 }
 
+static unsigned long find_mmap_logic_end(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma = mm->mmap;
+	unsigned long mmap_end = 0;
+
+	while (vma) {
+		if (mmap_end < mm->brk) {
+			mmap_end = vma->vm_start;
+			vma = vma->vm_next;
+			continue;
+		}
+			
+		mmap_end = min_t(unsigned long, mmap_end, vma->vm_start);
+		vma = vma->vm_next;
+	}
+
+	vma = mm->mmap->vm_prev;
+	while (vma) {
+		if (mmap_end < mm->brk) {
+			mmap_end = vma->vm_start;
+			vma = vma->vm_prev;
+			continue;
+		}
+		mmap_end = min_t(unsigned long, mmap_end, vma->vm_start);
+		vma = vma->vm_prev;
+	}
+
+	return mmap_end;
+}
+
 void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 {
+	struct mm_struct *mm = info->mm;
 	struct pg_state st = {
 		.seq = m,
 		.marker = info->markers,
 	};
 
+	if (info->name)
+		pt_dump_seq_printf(m, "Find pid comm: %s\n", info->name);
+
+	if (info->has_user_space) {
+		pt_dump_seq_printf(m, "Real address space distribution:\n");
+		pt_dump_seq_printf(m, "\tText code:    0x%016lx-0x%016lx\n", mm->start_code, mm->end_code);
+		pt_dump_seq_printf(m, "\tData:         0x%016lx-0x%016lx\n", mm->start_data, mm->end_data);
+		pt_dump_seq_printf(m, "\tBrk (heap):   0x%016lx-0x%016lx\n", mm->start_brk, mm->brk);
+		pt_dump_seq_printf(m, "\tMmap (logic): 0x%016lx-0x%016lx\n", mm->mmap_base, find_mmap_logic_end(mm));
+		pt_dump_seq_printf(m, "\tStack top:    0x%016lx\n", mm->start_stack);
+		pt_dump_seq_printf(m, "\tArg:          0x%016lx-0x%016lx\n", mm->arg_start, mm->arg_end);
+		pt_dump_seq_printf(m, "\tEnv:          0x%016lx-0x%016lx\n", mm->env_start, mm->env_end);
+	}
+	pt_dump_seq_puts(m, "\n");
+
+	if (info->check_addr) {
+		pt_dump_seq_printf(m, "Find virt addr: 0x%016lx\n", info->check_addr);
+		pt_dump_seq_printf(m, "Find result:\n");
+		pt_dump_seq_printf(m, "\tTestsdasdsadsad\n");
+
+		return;
+	}
+	
 	walk_pgd(&st, info->mm, info->base_addr);
 
 	note_page(&st, 0, 0, 0);
@@ -380,7 +475,9 @@ void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 static int ptdump_show(struct seq_file *m, void *v)
 {
 	struct ptdump_info *info = m->private;
+
 	ptdump_walk_pgd(m, info);
+
 	return 0;
 }
 
@@ -394,9 +491,12 @@ static void ptdump_initialize(void)
 				pg_level[i].mask |= pg_level[i].bits[j].mask;
 }
 
-static struct ptdump_info kernel_ptdump_info = {
+static struct ptdump_info ptdump_info = {
 	.markers	= address_markers,
 	.base_addr	= VA_START,
+	.name		= NULL,
+	.has_user_space	= 0,
+	.check_addr = 0,
 };
 
 static int pid_page_tables_open(struct inode *inode, struct file *file)
@@ -404,61 +504,148 @@ static int pid_page_tables_open(struct inode *inode, struct file *file)
 	return single_open(file, &ptdump_show, inode->i_private);
 }
 
+#define NONE_SPACE 0
+#define KERNEL_SPACE 1
+#define USER_SPACE 2
+
+static int parse_cmdline_str(char *str, int *space, unsigned long *pid, unsigned long *addr)
+{
+	size_t length;
+	char *parse_buffer;
+	char tmp_buffer[20] = { [0 ... 19 ] = 0};
+
+	if (!space || !pid || !addr)
+		return -EINVAL;
+
+	parse_buffer = skip_spaces(str);
+
+	if (strncmp(parse_buffer, "kernel", 6) == 0) {
+		*space = KERNEL_SPACE;
+		parse_buffer += 6;
+	} else if (strncmp (parse_buffer, "pid", 3) == 0) {
+		*space = USER_SPACE;
+		parse_buffer += 3;
+
+		parse_buffer = skip_spaces(parse_buffer);
+
+		length = strcspn(parse_buffer, " ");
+		strncpy(tmp_buffer, parse_buffer, length);
+		parse_buffer += length;
+
+		if (kstrtoul(tmp_buffer, 0, pid))
+			return -EINVAL;
+	} else
+		return -EINVAL;
+
+	parse_buffer = skip_spaces(parse_buffer);
+	if (*parse_buffer == '\0')
+		return 0;
+
+	length = strcspn(parse_buffer, " ");
+	strncpy(tmp_buffer, parse_buffer, length);
+	if (kstrtoul(tmp_buffer, 0, addr))
+		return -EINVAL;
+
+	return 0;
+}
+
 ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_t s, loff_t *o)
 {
+	int ret = s;
 	void *buffer;
-	unsigned long pid;
+	int space;
+	unsigned long pid = 0;
+	unsigned long addr = 0;
 	struct pid *kpid;
 	struct task_struct *ts;
 
 	buffer = kzalloc(s, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
-
-	if (copy_from_user(buffer, b, s))
-		return -EFAULT;
-
-	printk("Input: %s\n", (char *)buffer);
-	if (kstrtoul(buffer, 0, &pid))
-		return -EINVAL;
 	
-	printk("str to ul 0x%lx\n", pid);
-
-	kpid = find_get_pid(pid);
-	ts = get_pid_task(kpid, PIDTYPE_PID);
-	if (ts) {
-		printk("aaaaaa task comm %s\n", ts->comm);
-		printk("aaaaaa task mm 0x%lx\n", ts->mm);
-		printk("aaaaaa task mm 0x%lx\n", ts->active_mm);
-		if (ts->mm) {
-			struct vm_area_struct *tmp = ts->mm->mmap->vm_prev;
-			struct vm_area_struct *vma = ts->mm->mmap;
-			printk("pgd 0x%lx\n", ts->mm->pgd);
-			mm.pgd = ts->mm->pgd;
-			kernel_ptdump_info.base_addr = 0;
-			printk("aaaa text code 0x%lx - 0x%lx\n", ts->mm->start_code, ts->mm->end_code);
-			printk("aaaa data 0x%lx - 0x%lx\n", ts->mm->start_data, ts->mm->end_data);
-			printk("aaaa brk 0x%lx - 0x%lx\n", ts->mm->start_brk, ts->mm->brk);
-			printk("aaaa stack 0x%lx\n", ts->mm->start_stack);
-			printk("aaaa arg_start 0x%lx - 0x%lx\n", ts->mm->arg_start, ts->mm->arg_end);
-			printk("aaaa env_start 0x%lx - 0x%lx\n", ts->mm->env_start, ts->mm->env_end);
-			printk("aaaa mmap_base 0x%lx - 0x%lx\n", ts->mm->mmap_base, ts->mm->highest_vm_end);
-			while (vma) {
-				printk("aaaa vma 0x%lx - 0x%lx\n", vma->vm_start, vma->vm_end);
-				vma = vma->vm_next;
-			}
-			while (tmp) {
-				printk("tmp vma 0x%lx - 0x%lx\n", tmp->vm_start, tmp->vm_end);
-				tmp = tmp->vm_prev;
-			}
-			
-		}
+	if (copy_from_user(buffer, b, s)) {
+		ret = -EFAULT;
+		goto out;
 	}
 
+	if (parse_cmdline_str(buffer, &space, &pid, &addr)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
+	ptdump_info.check_addr = addr ? addr : 0;
+
+	if (space == KERNEL_SPACE) {
+		mm.pgd = kernel_pgd;
+		ptdump_info.mm = &mm;
+		ptdump_info.markers = address_markers;
+		ptdump_info.base_addr = VA_START;
+		ptdump_info.name = NULL;
+		ptdump_info.has_user_space = 0;
+	} else {
+		kpid = find_get_pid(pid);
+		ts = get_pid_task(kpid, PIDTYPE_PID);
+		if (ts) {
+			if (ts->mm) {
+				mm.pgd = ts->mm->pgd;
+				ptdump_info.markers = address_markers_user;
+				ptdump_info.base_addr = 0;
+				ptdump_info.has_user_space = 1;
+			} else {
+				mm.pgd = kernel_pgd;
+				ptdump_info.mm = &mm;
+				ptdump_info.markers = address_markers;
+				ptdump_info.base_addr = VA_START;
+				ptdump_info.has_user_space = 0;
+			}
+			ptdump_info.name = ts->comm;
+
+			if (ts->mm) {
+				address_markers_user[START_CODE].start_address = rounddown(ts->mm->start_code, PAGE_SIZE);
+				address_markers_user[END_CODE].start_address = roundup(ts->mm->end_code, PAGE_SIZE);
+
+				address_markers_user[START_DATA].start_address = rounddown(ts->mm->start_data, PAGE_SIZE);
+				address_markers_user[END_DATA].start_address = roundup(ts->mm->end_data, PAGE_SIZE);
+
+				address_markers_user[START_BRK].start_address = rounddown(ts->mm->start_brk, PAGE_SIZE);
+				address_markers_user[END_BRK].start_address = roundup(ts->mm->brk, PAGE_SIZE);
+
+				address_markers_user[MMAP_END].start_address = roundup(ts->mm->brk, PAGE_SIZE);
+				address_markers_user[MMAP_BASE].start_address = roundup(ts->mm->mmap_base, PAGE_SIZE);
+
+				address_markers_user[MISC_START].start_address = roundup(ts->mm->mmap_base, PAGE_SIZE);
+				address_markers_user[MISC_END].start_address = roundup(ts->mm->highest_vm_end, PAGE_SIZE);
+
+				mm.start_code = ts->mm->start_code;
+				mm.end_code = ts->mm->end_code;
+
+				mm.start_data = ts->mm->start_data;
+				mm.end_data = ts->mm->end_data;
+
+				mm.start_brk = ts->mm->start_brk;
+				mm.brk = ts->mm->brk;
+
+				mm.mmap_base = ts->mm->mmap_base;
+				mm.mmap = ts->mm->mmap;
+				mm.highest_vm_end = ts->mm->highest_vm_end;
+
+				mm.start_stack = ts->mm->start_stack;
+
+				mm.arg_start = ts->mm->arg_start;
+				mm.arg_end = ts->mm->arg_end;
+
+				mm.env_start = ts->mm->env_start;
+				mm.env_end = ts->mm->env_end;
+			}
+		} else {
+			ret = -ESRCH;
+			goto out;
+		}
+	}
+out:
 	kfree(buffer);
 
-	return s;
+	return ret;
 }
 
 static const struct file_operations pid_page_tables_fops = {
@@ -473,12 +660,13 @@ static const struct file_operations pid_page_tables_fops = {
 static int __init pid_page_tables_init(void)
 {
 	unsigned long ttbr1 = read_sysreg(ttbr1_el1);
-	mm.pgd = (pgd_t *)phys_to_virt(__phys_to_pgd_val(ttbr1));
-	kernel_ptdump_info.mm = &mm;
+	kernel_pgd = (pgd_t *)phys_to_virt(__phys_to_pgd_val(ttbr1));
+	mm.pgd = kernel_pgd;
+	ptdump_info.mm = &mm;
 
 	ptdump_initialize();
 	pid_page_tables_file = debugfs_create_file("pid_page_tables", 0444, NULL,
-	&kernel_ptdump_info, &pid_page_tables_fops);
+	&ptdump_info, &pid_page_tables_fops);
 
 	return 0;
 }
