@@ -436,6 +436,47 @@ static unsigned long find_mmap_logic_end(struct mm_struct *mm)
 	return mmap_end;
 }
 
+static unsigned long virt_addr_to_pfn(struct mm_struct *mm, unsigned long addr, int *type)
+{
+	pgd_t *pgdp;
+	pud_t *pudp, pud;
+	pmd_t *pmdp, pmd;
+	pte_t *ptep, pte;
+
+	pgdp = pgd_offset(mm, addr);
+	if (pgd_none(READ_ONCE(*pgdp)))
+		return 0;
+
+	pudp = pud_offset(pgdp, addr);
+	pud = READ_ONCE(*pudp);
+	if (pud_none(pud))
+		return 0;
+
+	if (pud_sect(pud)) {
+		*type = pfn_valid(pud_pfn(pud));
+
+		return pud_pfn(pud);
+	}
+
+	pmdp = pmd_offset(pudp, addr);
+	pmd = READ_ONCE(*pmdp);
+	if (pmd_none(pmd))
+		return 0;
+
+	if (pmd_sect(pmd)) {
+		*type = pfn_valid(pmd_pfn(pmd));
+		return pmd_pfn(pmd);
+	}
+
+	ptep = pte_offset_kernel(pmdp, addr);
+	pte = READ_ONCE(*ptep);
+	if (pte_none(pte))
+		return 0;
+
+	*type = pfn_valid(pte_pfn(pte));
+	return pte_pfn(pte);
+}
+
 void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 {
 	struct mm_struct *mm = info->mm;
@@ -443,6 +484,11 @@ void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 		.seq = m,
 		.marker = info->markers,
 	};
+
+	if (info->has_user_space)
+		pt_dump_seq_printf(m, "-----[User space]-----\n");
+	else
+		pt_dump_seq_printf(m, "-----[Kernel space]-----\n");
 
 	if (info->name)
 		pt_dump_seq_printf(m, "Find pid comm: %s\n", info->name);
@@ -460,9 +506,20 @@ void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 	pt_dump_seq_puts(m, "\n");
 
 	if (info->check_addr) {
+		unsigned long pfn = 0;
+		int type = 0;
+
 		pt_dump_seq_printf(m, "Find virt addr: 0x%016lx\n", info->check_addr);
-		pt_dump_seq_printf(m, "Find result:\n");
-		pt_dump_seq_printf(m, "\tTestsdasdsadsad\n");
+		pt_dump_seq_printf(m, "Find result: ");
+
+		pfn = virt_addr_to_pfn(mm, info->check_addr, &type);
+		if (pfn) {
+			if (type)
+				pt_dump_seq_printf(m, "System RAM [0x%016llx]\n", __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+			else
+				pt_dump_seq_printf(m, "I/O MEM [0x%016llx]\n", __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+		} else
+			pt_dump_seq_printf(m, "(null)\n");
 
 		return;
 	}
@@ -679,5 +736,7 @@ static void __exit pid_page_tables_exit(void)
 
 module_init(pid_page_tables_init);
 module_exit(pid_page_tables_exit);
+
+MODULE_AUTHOR("yi.zhang@bst.ai");
 MODULE_LICENSE("GPL");
 MODULE_INFO(intree, "Y");
