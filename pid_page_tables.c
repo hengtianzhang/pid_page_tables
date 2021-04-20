@@ -564,12 +564,13 @@ static int pid_page_tables_open(struct inode *inode, struct file *file)
 #define NONE_SPACE 0
 #define KERNEL_SPACE 1
 #define USER_SPACE 2
+#define MAX_LENGTH	30
 
 static int parse_cmdline_str(char *str, int *space, unsigned long *pid, unsigned long *addr)
 {
 	size_t length;
 	char *parse_buffer;
-	char tmp_buffer[20] = { [0 ... 19 ] = 0};
+	char tmp_buffer[MAX_LENGTH] = { [0 ... MAX_LENGTH - 1 ] = 0};
 
 	if (!space || !pid || !addr)
 		return -EINVAL;
@@ -586,6 +587,9 @@ static int parse_cmdline_str(char *str, int *space, unsigned long *pid, unsigned
 		parse_buffer = skip_spaces(parse_buffer);
 
 		length = strcspn(parse_buffer, " ");
+		if (length > MAX_LENGTH)
+			return -EINVAL;
+
 		strncpy(tmp_buffer, parse_buffer, length);
 		parse_buffer += length;
 
@@ -599,6 +603,9 @@ static int parse_cmdline_str(char *str, int *space, unsigned long *pid, unsigned
 		return 0;
 
 	length = strcspn(parse_buffer, " ");
+	if (length > MAX_LENGTH)
+		return -EINVAL;
+
 	strncpy(tmp_buffer, parse_buffer, length);
 	if (kstrtoul(tmp_buffer, 0, addr))
 		return -EINVAL;
