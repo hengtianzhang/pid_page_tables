@@ -477,7 +477,7 @@ static unsigned long virt_addr_to_pfn(struct mm_struct *mm, unsigned long addr, 
 	return pte_pfn(pte);
 }
 
-void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
+static void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 {
 	struct mm_struct *mm = info->mm;
 	struct pg_state st = {
@@ -606,7 +606,7 @@ static int parse_cmdline_str(char *str, int *space, unsigned long *pid, unsigned
 	return 0;
 }
 
-ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_t s, loff_t *o)
+static ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_t s, loff_t *o)
 {
 	int ret = s;
 	void *buffer;
