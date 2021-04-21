@@ -17,6 +17,7 @@
 #include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
@@ -477,6 +478,32 @@ static unsigned long virt_addr_to_pfn(struct mm_struct *mm, unsigned long addr, 
 	return pte_pfn(pte);
 }
 
+static struct resource *next_resource(struct resource *p)
+{
+	if (p->child)
+		return p->child;
+	while (!p->sibling && p->parent)
+		p = p->parent;
+	return p->sibling;
+}
+
+static struct resource *find_iomem_res(unsigned long addr)
+{
+	struct resource *p;
+
+	// read lock ?
+
+	for (p = iomem_resource.child; p; p = next_resource(p)) {
+		if (p->start <= addr && addr <= p->end)
+			break;
+	}
+
+	if (!p)
+		return NULL;
+
+	return p;
+}
+
 static void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 {
 	struct mm_struct *mm = info->mm;
@@ -514,10 +541,15 @@ static void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 
 		pfn = virt_addr_to_pfn(mm, info->check_addr, &type);
 		if (pfn) {
-			if (type)
-				pt_dump_seq_printf(m, "System RAM [0x%016llx]\n", __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
-			else
-				pt_dump_seq_printf(m, "I/O MEM [0x%016llx]\n", __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+			struct resource *res;
+
+			res = find_iomem_res(__pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+			if (res) {
+				pt_dump_seq_printf(m, "%s [0x%016llx]", res->name, __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+			} else {
+				pt_dump_seq_printf(m, "I/O MEM or Resvered RAM [0x%016llx]", __pfn_to_phys(pfn) + offset_in_page(info->check_addr));
+			}
+			pt_dump_seq_printf(m, " %s\n", type ? "Mem Map" : "No Mem Map");
 		} else
 			pt_dump_seq_printf(m, "(null)\n");
 
