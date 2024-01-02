@@ -418,7 +418,7 @@ static unsigned long find_mmap_logic_end(struct mm_struct *mm)
 			vma = vma->vm_next;
 			continue;
 		}
-			
+
 		mmap_end = min_t(unsigned long, mmap_end, vma->vm_start);
 		vma = vma->vm_next;
 	}
@@ -555,7 +555,7 @@ static void ptdump_walk_pgd(struct seq_file *m, struct ptdump_info *info)
 
 		return;
 	}
-	
+
 	walk_pgd(&st, info->mm, info->base_addr);
 
 	note_page(&st, 0, 0, 0);
@@ -658,7 +658,7 @@ static ssize_t pid_page_tables_write(struct file *f, const char __user *b, size_
 	buffer = kzalloc(s, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
-	
+
 	if (copy_from_user(buffer, b, s)) {
 		ret = -EFAULT;
 		goto out;
@@ -776,6 +776,6 @@ static void __exit pid_page_tables_exit(void)
 module_init(pid_page_tables_init);
 module_exit(pid_page_tables_exit);
 
-MODULE_AUTHOR("yi.zhang@bst.ai");
+MODULE_AUTHOR("hengtian.zhang@foxmail.com");
 MODULE_LICENSE("GPL");
 MODULE_INFO(intree, "Y");

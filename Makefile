@@ -1,10 +1,11 @@
+KVERS := $(shell uname -r)
+
 obj-m := pid_page_tables.o
 
-KDIR := /home/miracle/work/linux_kernel/build
-PWD := $(shell pwd)
+build: kernel_modules
 
-default:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+kernel_modules:
+	$(MAKE) -C /lib/modules/$(KVERS)/build M=$(CURDIR) modules
 
 clean:
-	rm -rf .*cmd *.o *.mod.c *.ko .tmp_versions *.order *symvers *Module.markers .*.d
+	$(MAKE) -C /lib/modules/$(KVERS)/build M=$(CURDIR) clean
